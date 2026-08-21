@@ -40,7 +40,7 @@ export function PaymentModal({ userEmail, onClose }: PaymentModalProps) {
     };
 
     try {
-      const response = await fetch('/api/auth/submit-payment', {
+      const response = await fetch('http://localhost:8000/api/auth/submit-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

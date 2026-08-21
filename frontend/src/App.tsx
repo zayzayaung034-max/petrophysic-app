@@ -1,18 +1,57 @@
 import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import AdminPayments from './AdminPayments';
 import { LasUploader } from './LasUploader';
 import AuthModal, { type UserSession } from './AuthModal';
 import { PaymentModal } from './PaymentModal';
 
-export default function App() {
+function MainDashboard() {
   const [user, setUser] = useState<UserSession | null>(null);
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isPaymentOpen, setIsPaymentOpen] = useState(false);
+
+  // Helper function to sync fresh state with backend & localStorage
+  const refreshUserSession = async (currentEmail: string, passwordHash?: string) => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: currentEmail.trim().toLowerCase(), password: passwordHash || 'dummy' }),
+      });
+
+      if (response.ok) {
+        const freshData = await response.json();
+        
+        // Ensure integer 1 / 0 from SQLite parses accurately to boolean true / false
+        const isPaidUser = freshData.is_paid === true || freshData.is_paid === 1 || Boolean(freshData.is_paid);
+        const hasAccessUser = freshData.has_access === true || freshData.has_access === 1 || Boolean(freshData.has_access);
+
+        const updatedSession: UserSession = {
+          user_email: freshData.user_email || currentEmail,
+          is_paid: isPaidUser,
+          has_access: hasAccessUser,
+          trial_days_remaining: freshData.trial_days_remaining ?? 0,
+        };
+        
+        setUser(updatedSession);
+        localStorage.setItem('user_session', JSON.stringify(updatedSession));
+      }
+    } catch (error) {
+      console.error('Failed to sync user status from server:', error);
+    }
+  };
 
   useEffect(() => {
     const savedSession = localStorage.getItem('user_session');
     if (savedSession) {
       try {
-        setUser(JSON.parse(savedSession));
+        const parsedUser: UserSession = JSON.parse(savedSession);
+        setUser(parsedUser);
+        
+        // Fetch latest status from backend to catch background database changes
+        if (parsedUser?.user_email) {
+          refreshUserSession(parsedUser.user_email);
+        }
       } catch {
         localStorage.removeItem('user_session');
       }
@@ -24,6 +63,9 @@ export default function App() {
     setUser(null);
   };
 
+  // Determine if user has pro status (supports boolean true or numeric 1)
+  const isPro = user ? (user.is_paid === true || (user.is_paid as unknown) === 1) : false;
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', fontFamily: 'sans-serif' }}>
       {/* Navigation Header */}
@@ -33,7 +75,7 @@ export default function App() {
           {user ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               {/* Account Status Badge */}
-              {user.is_paid ? (
+              {isPro ? (
                 <span style={proBadgeStyle}>PRO MEMBER</span>
               ) : (
                 <span style={trialBadgeStyle}>
@@ -46,7 +88,7 @@ export default function App() {
               <span style={{ fontSize: '14px', color: '#cbd5e1' }}>{user.user_email}</span>
 
               {/* Upgrade Button */}
-              {!user.is_paid && (
+              {!isPro && (
                 <button onClick={() => setIsPaymentOpen(true)} style={upgradeButtonStyle}>
                   Upgrade to Pro
                 </button>
@@ -89,17 +131,36 @@ export default function App() {
       <AuthModal
         isOpen={isAuthOpen}
         onClose={() => setIsAuthOpen(false)}
-        onAuthSuccess={(session) => setUser(session)}
+        onAuthSuccess={(session) => {
+          setUser(session);
+          localStorage.setItem('user_session', JSON.stringify(session));
+        }}
       />
 
       {/* Payment Modal */}
       {isPaymentOpen && user && (
         <PaymentModal
           userEmail={user.user_email}
-          onClose={() => setIsPaymentOpen(false)}
+          onClose={() => {
+            setIsPaymentOpen(false);
+            // Re-check payment status when closing payment modal
+            refreshUserSession(user.user_email);
+          }}
         />
       )}
     </div>
+  );
+}
+
+// Router Setup
+export default function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<MainDashboard />} />
+        <Route path="/admin" element={<AdminPayments />} />
+      </Routes>
+    </Router>
   );
 }
 
@@ -147,10 +208,10 @@ const largeButtonStyle: React.CSSProperties = {
 };
 
 const proBadgeStyle: React.CSSProperties = {
-  backgroundColor: '#1e293b',
-  color: '#38bdf8',
-  border: '1px solid #0284c7',
-  padding: '4px 8px',
+  backgroundColor: '#15803d',
+  color: '#ffffff',
+  border: '1px solid #22c55e',
+  padding: '4px 10px',
   borderRadius: '4px',
   fontSize: '11px',
   fontWeight: 'bold',

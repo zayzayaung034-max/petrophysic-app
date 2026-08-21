@@ -35,7 +35,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }: AuthModalP
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
       });
 
       const data = await response.json();
@@ -44,14 +44,20 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }: AuthModalP
         throw new Error(data.detail || 'Authentication failed');
       }
 
+      // Handle both boolean (true/false) and SQLite numeric booleans (1/0)
+      const isPaidUser = data.is_paid === true || data.is_paid === 1 || Boolean(data.is_paid);
+
       const session: UserSession = {
         user_email: data.user_email || email,
-        is_paid: Boolean(data.is_paid),
-        has_access: Boolean(data.has_access),
+        is_paid: isPaidUser,
+        has_access: data.has_access === true || data.has_access === 1 || Boolean(data.has_access),
         trial_days_remaining: data.trial_days_remaining ?? 0,
       };
 
+      // Persist session to local storage
       localStorage.setItem('user_session', JSON.stringify(session));
+
+      // Update parent React state and close modal
       onAuthSuccess(session);
       onClose();
     } catch (err: any) {

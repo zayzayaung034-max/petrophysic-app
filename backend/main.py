@@ -1,21 +1,27 @@
-import csv
-from datetime import datetime, timedelta
-import io
-import os
-import sqlite3
-from typing import Any, Dict, List, Optional
-
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta
+import csv
+import io
+import os
 import lasio
 import numpy as np
-from pydantic import BaseModel
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+# Database imports
+import models
+from database import engine, get_db
+
+# Initialize Database Tables
+models.Base.metadata.create_all(bind=engine)
 
 # Import external routers if present
 try:
@@ -23,27 +29,25 @@ try:
 except ImportError:
     payment_router = None
 
-# Ensure upload directory exists
 UPLOAD_DIR = "./uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="AKZ Petroleum Engineering Forum API")
 
-# CORS Middleware Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust for production frontend (e.g., ["http://localhost:5173"])
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],  # Critical for browser file downloads
+    expose_headers=["Content-Disposition"],
 )
 
 if payment_router:
     app.include_router(payment_router)
 
 
-# Request Models
+# Request Schemas
 class AuthRequest(BaseModel):
     email: str
     password: str
@@ -52,12 +56,16 @@ class AuthRequest(BaseModel):
 class PaymentSubmitRequest(BaseModel):
     user_email: str
     plan_name: Optional[str] = "Pro Subscription"
-    payment_method: str  # 'Western Union', 'USDT', or 'BTC'
+    payment_method: str
     sender_full_name: Optional[str] = None
     sender_country: Optional[str] = None
     mtcn: Optional[str] = None
     tx_hash: Optional[str] = None
     network: Optional[str] = None
+
+
+class PaymentStatusUpdate(BaseModel):
+    status: str
 
 
 # Helper Functions
@@ -67,65 +75,32 @@ def safe_float(val: Any) -> Optional[float]:
     return float(val)
 
 
-def get_user_trial_info(email: str) -> Dict[str, Any]:
-    """Queries SQLite database to fetch remaining trial days and access status."""
-    db_path = "instance/forum.db" if os.path.exists("instance/forum.db") else "forum.db"
+def fetch_or_create_user_info(db: Session, email: str) -> Dict[str, Any]:
+    """Retrieves user info via SQLAlchemy or auto-creates user if missing."""
+    user = db.query(models.User).filter(models.User.email == email).first()
+    
+    if not user:
+        # Create user record automatically on first check
+        user = models.User(
+            email=email,
+            password="default_hash_or_placeholder",
+            is_paid=False,
+            trial_ends_at=datetime.utcnow() + timedelta(days=14)
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
 
-    if not os.path.exists(db_path):
-        return {"is_paid": False, "has_access": True, "trial_days_remaining": 14}
+    remaining_days = 0
+    if user.trial_ends_at:
+        delta = user.trial_ends_at - datetime.utcnow()
+        remaining_days = max(0, delta.days)
 
-    try:
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        # Find table name ('user' or 'users')
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = [row[0] for row in cursor.fetchall()]
-        table_name = "users" if "users" in tables else ("user" if "user" in tables else None)
-
-        if not table_name:
-            conn.close()
-            return {"is_paid": False, "has_access": True, "trial_days_remaining": 14}
-
-        # Query user record
-        cursor.execute(f"SELECT * FROM {table_name} WHERE email = ?", (email,))
-        row = cursor.fetchone()
-
-        if not row:
-            conn.close()
-            return {"is_paid": False, "has_access": True, "trial_days_remaining": 14}
-
-        # Check column index for trial_ends_at
-        cursor.execute(f"PRAGMA table_info({table_name});")
-        columns = [col[1] for col in cursor.fetchall()]
-
-        trial_days = 14
-        if "trial_ends_at" in columns:
-            idx = columns.index("trial_ends_at")
-            expiry_val = row[idx]
-            if expiry_val:
-                expiry_str = str(expiry_val).split(".")[0]
-                try:
-                    expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%d %H:%M:%S")
-                    delta = expiry_dt - datetime.utcnow()
-                    trial_days = max(0, delta.days)
-                except ValueError:
-                    trial_days = 14
-
-        is_paid = False
-        if "is_paid" in columns:
-            is_paid = bool(row[columns.index("is_paid")])
-
-        conn.close()
-        return {
-            "is_paid": is_paid,
-            "has_access": is_paid or (trial_days > 0),
-            "trial_days_remaining": trial_days,
-        }
-
-    except Exception as e:
-        print(f"Database query error: {e}")
-        return {"is_paid": False, "has_access": True, "trial_days_remaining": 14}
+    return {
+        "is_paid": user.is_paid,
+        "has_access": bool(user.is_paid or remaining_days > 0),
+        "trial_days_remaining": remaining_days,
+    }
 
 
 # Root Health Check
@@ -136,14 +111,14 @@ def read_root():
 
 # Authentication Endpoints
 @app.post("/api/auth/register")
-async def register(data: AuthRequest):
+async def register(data: AuthRequest, db: Session = Depends(get_db)):
     if not data.email or not data.password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email and password are required",
         )
 
-    user_info = get_user_trial_info(data.email)
+    user_info = fetch_or_create_user_info(db, data.email)
 
     return {
         "user_email": data.email,
@@ -155,14 +130,14 @@ async def register(data: AuthRequest):
 
 
 @app.post("/api/auth/login")
-async def login(data: AuthRequest):
+async def login(data: AuthRequest, db: Session = Depends(get_db)):
     if not data.email or not data.password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email and password are required",
         )
 
-    user_info = get_user_trial_info(data.email)
+    user_info = fetch_or_create_user_info(db, data.email)
 
     return {
         "user_email": data.email,
@@ -173,22 +148,24 @@ async def login(data: AuthRequest):
     }
 
 
-# Payment Submission Endpoint
+# Payment Management Endpoints
 @app.post("/api/auth/submit-payment")
-async def submit_payment(payment_data: PaymentSubmitRequest):
-    """Processes incoming Western Union, USDT, or BTC proof of payments."""
-    print("=== NEW PAYMENT SUBMISSION RECEIVED ===")
-    print(f"User Email: {payment_data.user_email}")
-    print(f"Plan: {payment_data.plan_name}")
-    print(f"Payment Method: {payment_data.payment_method}")
+async def submit_payment(payment_data: PaymentSubmitRequest, db: Session = Depends(get_db)):
+    new_submission = models.PaymentSubmission(
+        user_email=payment_data.user_email,
+        plan_name=payment_data.plan_name,
+        payment_method=payment_data.payment_method,
+        sender_full_name=payment_data.sender_full_name,
+        sender_country=payment_data.sender_country,
+        mtcn=payment_data.mtcn,
+        tx_hash=payment_data.tx_hash,
+        network=payment_data.network,
+        status="pending",
+    )
 
-    if payment_data.payment_method == "Western Union":
-        print(f"Sender Name: {payment_data.sender_full_name}")
-        print(f"Sender Country: {payment_data.sender_country}")
-        print(f"MTCN: {payment_data.mtcn}")
-    elif payment_data.payment_method in ["USDT", "BTC"]:
-        print(f"Network: {payment_data.network or 'Default'}")
-        print(f"TxHash: {payment_data.tx_hash}")
+    db.add(new_submission)
+    db.commit()
+    db.refresh(new_submission)
 
     return {
         "status": "success",
@@ -196,7 +173,52 @@ async def submit_payment(payment_data: PaymentSubmitRequest):
     }
 
 
-# File Upload Endpoint
+@app.get("/api/admin/payments")
+def get_all_payments(admin_secret_key: str = "123456", db: Session = Depends(get_db)):
+    if admin_secret_key != "123456":
+        raise HTTPException(status_code=403, detail="Unauthorized access")
+
+    payments = db.query(models.PaymentSubmission).all()
+    return payments
+
+
+@app.put("/api/admin/payments/{payment_id}/status")
+def update_payment_status(
+    payment_id: int,
+    payload: PaymentStatusUpdate,
+    admin_secret_key: str = "123456",
+    db: Session = Depends(get_db),
+):
+    if admin_secret_key != "123456":
+        raise HTTPException(status_code=403, detail="Unauthorized access")
+
+    submission = db.query(models.PaymentSubmission).filter(models.PaymentSubmission.id == payment_id).first()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Payment record not found")
+
+    new_status = payload.status.lower()
+    submission.status = new_status
+
+    # Elevate User in Database via SQLAlchemy
+    if new_status == "approved":
+        user = db.query(models.User).filter(models.User.email == submission.user_email).first()
+        if user:
+            user.is_paid = True
+        else:
+            # Create the user directly if missing and grant access
+            user = models.User(
+                email=submission.user_email,
+                password="default_hash_or_placeholder",
+                is_paid=True
+            )
+            db.add(user)
+
+    db.commit()
+    db.refresh(submission)
+    return {"status": "success", "message": f"Payment #{payment_id} updated to {payload.status}"}
+
+
+# File Processing & Analysis Endpoints
 @app.post("/api/upload-las")
 async def upload_las(file: UploadFile = File(...)):
     if not file.filename.endswith(".las"):
@@ -216,14 +238,14 @@ async def upload_las(file: UploadFile = File(...)):
     }
 
 
-# Petrophysical LAS Analysis Endpoint
 @app.post("/api/analyze-las")
 async def analyze_las(
     file: UploadFile = File(...),
     user_email: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
 ):
     if user_email:
-        user_info = get_user_trial_info(user_email)
+        user_info = fetch_or_create_user_info(db, user_email)
         if not user_info["has_access"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -253,7 +275,6 @@ async def analyze_las(
     nphi = get_curve(["NPHI", "TNPH"])
     rt = get_curve(["RT", "RD", "LLD", "ILD", "RES"])
 
-    # Compute PHID from RHOB if PHID is missing (Sandstone matrix rho_ma = 2.65, fluid rho_f = 1.0)
     if all(v is None for v in phid) and any(r is not None for r in rhob):
         phid = []
         for r in rhob:
@@ -263,7 +284,6 @@ async def analyze_las(
             else:
                 phid.append(None)
 
-    # Fallback Vsh calculation from GR if VSH is missing
     valid_gr = [g for g in gr if g is not None]
     if all(v is None for v in vsh) and valid_gr:
         gr_min, gr_max = min(valid_gr), max(valid_gr)
@@ -281,20 +301,17 @@ async def analyze_las(
     for i in range(len(depths)):
         v_val = vsh[i] if vsh[i] is not None else 0.0
         pd_val = phid[i] if phid[i] is not None else 0.0
-        rt_val = rt[i] if (rt[i] is not None and rt[i] > 0) else 10.0  # Fallback RT
+        rt_val = rt[i] if (rt[i] is not None and rt[i] > 0) else 10.0
 
-        # Effective Porosity
         phi_e = max(0.0, pd_val * (1.0 - v_val))
         phi_e_list.append(safe_float(phi_e))
 
-        # Archie Water Saturation
         if phi_e > 0.001 and rt_val > 0:
             sw_val = min(1.0, max(0.0, float(((1.0 * 0.05) / ((phi_e**2.0) * rt_val)) ** 0.5)))
         else:
             sw_val = 1.0
         sw_list.append(safe_float(sw_val))
 
-        # Net Pay Cutoffs: Vsh < 30%, Phi_e > 10%, Sw < 50%
         if v_val < 0.30 and phi_e > 0.10 and sw_val < 0.50:
             net_pay_feet += step
 
@@ -320,7 +337,7 @@ async def analyze_las(
     }
 
 
-# PDF Report Generation Endpoint
+# Export Endpoints
 @app.post("/api/export-pdf")
 async def export_pdf(data: dict):
     try:
@@ -391,7 +408,6 @@ async def export_pdf(data: dict):
         raise HTTPException(status_code=500, detail=f"PDF generation error: {str(e)}")
 
 
-# CSV Export Endpoint
 @app.post("/api/export-csv")
 async def export_csv(data: dict):
     try:
@@ -402,12 +418,10 @@ async def export_csv(data: dict):
         output = io.StringIO()
         writer = csv.writer(output)
 
-        # Write Header Row
         curve_keys = list(curves.keys())
         headers = ["DEPTH"] + curve_keys
         writer.writerow(headers)
 
-        # Write Data Rows
         num_rows = len(depths)
         for i in range(num_rows):
             row = [depths[i]]

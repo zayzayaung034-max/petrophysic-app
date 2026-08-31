@@ -28,8 +28,8 @@ try:
     from payments import payment_router
 except ImportError:
     payment_router = None
-
-UPLOAD_DIR = "./uploads"
+# Route uploads to ephemeral /tmp storage on Vercel to avoid Read-Only filesystem errors
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="AKZ Petroleum Engineering Forum API")

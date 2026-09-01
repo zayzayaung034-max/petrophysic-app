@@ -1,24 +1,29 @@
-from fastapi import FastAPI, HTTPException, Depends, status, File, Form, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import datetime, timedelta
 import csv
+from datetime import datetime, timedelta
 import io
 import os
+import tempfile
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
 import lasio
 import numpy as np
-
+from pydantic import BaseModel
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from sqlalchemy.orm import Session
 
 # Database imports
-import models
 from database import engine, get_db
+import models
+
+# Ephemeral directory configuration for serverless / Vercel
+UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Initialize Database Tables
 models.Base.metadata.create_all(bind=engine)
@@ -28,9 +33,6 @@ try:
     from payments import payment_router
 except ImportError:
     payment_router = None
-# Route uploads to ephemeral /tmp storage on Vercel to avoid Read-Only filesystem errors
-UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="AKZ Petroleum Engineering Forum API")
 
@@ -78,14 +80,14 @@ def safe_float(val: Any) -> Optional[float]:
 def fetch_or_create_user_info(db: Session, email: str) -> Dict[str, Any]:
     """Retrieves user info via SQLAlchemy or auto-creates user if missing."""
     user = db.query(models.User).filter(models.User.email == email).first()
-    
+
     if not user:
         # Create user record automatically on first check
         user = models.User(
             email=email,
             password="default_hash_or_placeholder",
             is_paid=False,
-            trial_ends_at=datetime.utcnow() + timedelta(days=14)
+            trial_ends_at=datetime.utcnow() + timedelta(days=14),
         )
         db.add(user)
         db.commit()
@@ -209,7 +211,7 @@ def update_payment_status(
             user = models.User(
                 email=submission.user_email,
                 password="default_hash_or_placeholder",
-                is_paid=True
+                is_paid=True,
             )
             db.add(user)
 

@@ -1,11 +1,7 @@
-fastapi
+﻿fastapi
 uvicorn
-lasio
-numpy
-pandas
-python-dotenv
-python-multipart
-pydantic
-asgiref
 sqlalchemy
+lasio
 reportlab
+numpy
+python-multipart

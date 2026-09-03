@@ -18,7 +18,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from sqlalchemy.orm import Session
 
 # Database imports
-from database import engine, get_db
+from backend.database import engine, get_db
 import models
 
 # Ephemeral directory configuration for serverless / Vercel
@@ -34,8 +34,13 @@ try:
 except ImportError:
     payment_router = None
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 app = FastAPI(title="AKZ Petroleum Engineering Forum API")
 
+# Place CORS Middleware directly after app initialization
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -53,7 +58,6 @@ if payment_router:
 class AuthRequest(BaseModel):
     email: str
     password: str
-
 
 class PaymentSubmitRequest(BaseModel):
     user_email: str

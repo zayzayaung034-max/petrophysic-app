@@ -1,6 +1,10 @@
 from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from datetime import datetime, timedelta
-from database import Base
+# CHANGE THIS:
+
+
+# TO THIS:
+from backend.database import Base  # or: from .database import Base
 
 class User(Base):
     __tablename__ = "users"

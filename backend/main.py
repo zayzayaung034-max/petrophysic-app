@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 
 # Database imports
 from backend.database import engine, get_db
-import models
+# CHANGE THIS:
+
+# TO THIS:
+from backend import models  # or: from . import models
 
 # Ephemeral directory configuration for serverless / Vercel
 UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
@@ -54,6 +57,9 @@ if payment_router:
     app.include_router(payment_router)
 
 
+#from typing import Optional
+from pydantic import BaseModel
+
 # Request Schemas
 class AuthRequest(BaseModel):
     email: str
@@ -67,8 +73,6 @@ class PaymentSubmitRequest(BaseModel):
     sender_country: Optional[str] = None
     mtcn: Optional[str] = None
     tx_hash: Optional[str] = None
-    network: Optional[str] = None
-
 
 class PaymentStatusUpdate(BaseModel):
     status: str

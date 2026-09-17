@@ -23,7 +23,7 @@ ChartJS.register(
   Legend
 );
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
+const API_BASE_URL = '';
 
 interface BackendAnalysisResponse {
   well_name: string;
@@ -128,7 +128,7 @@ export const LasUploader: React.FC = () => {
       });
     } catch (err: any) {
       console.error(err);
-      setStatus(`Server connection error. Ensure FastAPI is running on ${API_BASE_URL}.`);
+      setStatus('Server connection error. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -258,7 +258,7 @@ export const LasUploader: React.FC = () => {
     } catch (err: any) {
       console.error('PDF Download Error:', err);
       if (err.name === 'TypeError' && err.message === 'Failed to fetch') {
-        alert(`Network Error: Cannot reach backend at ${API_BASE_URL}. Ensure FastAPI is running and CORS is enabled.`);
+        alert('Network Error: Cannot reach backend server.');
       } else {
         alert(`PDF export error: ${err.message}`);
       }

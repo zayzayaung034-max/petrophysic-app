@@ -26,11 +26,9 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess }: AuthModalP
     e.preventDefault();
     setError(null);
     setLoading(true);
-
-    const endpoint = isRegister
-      ? 'http://127.0.0.1:8000/api/auth/register'
-      : 'http://127.0.0.1:8000/api/auth/login';
-
+const endpoint = isRegister
+  ? '/api/auth/register'
+  : '/api/auth/login';
     try {
       const response = await fetch(endpoint, {
         method: 'POST',

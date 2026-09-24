@@ -16,13 +16,15 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+ADMIN_KEY = os.getenv("ADMIN_PASSWORD") or "123456"
 
 # Database imports
 from backend.database import engine, get_db
-# CHANGE THIS:
-
-# TO THIS:
-from backend import models  # or: from . import models
+from backend import models
 
 # Ephemeral directory configuration for serverless / Vercel
 UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "uploads")
@@ -36,10 +38,6 @@ try:
     from payments import payment_router
 except ImportError:
     payment_router = None
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 
 app = FastAPI(title="AKZ Petroleum Engineering Forum API")
 
@@ -56,9 +54,6 @@ app.add_middleware(
 if payment_router:
     app.include_router(payment_router)
 
-
-#from typing import Optional
-from pydantic import BaseModel
 
 # Request Schemas
 class AuthRequest(BaseModel):
@@ -90,7 +85,6 @@ def fetch_or_create_user_info(db: Session, email: str) -> Dict[str, Any]:
     user = db.query(models.User).filter(models.User.email == email).first()
 
     if not user:
-        # Create user record automatically on first check
         user = models.User(
             email=email,
             password="default_hash_or_placeholder",
@@ -169,7 +163,6 @@ async def submit_payment(payment_data: PaymentSubmitRequest, db: Session = Depen
         sender_country=payment_data.sender_country,
         mtcn=payment_data.mtcn,
         tx_hash=payment_data.tx_hash,
-        network=payment_data.network,
         status="pending",
     )
 
@@ -184,8 +177,8 @@ async def submit_payment(payment_data: PaymentSubmitRequest, db: Session = Depen
 
 
 @app.get("/api/admin/payments")
-def get_all_payments(admin_secret_key: str = "123456", db: Session = Depends(get_db)):
-    if admin_secret_key != "123456":
+def get_all_payments(admin_secret_key: str, db: Session = Depends(get_db)):
+    if admin_secret_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized access")
 
     payments = db.query(models.PaymentSubmission).all()
@@ -196,10 +189,10 @@ def get_all_payments(admin_secret_key: str = "123456", db: Session = Depends(get
 def update_payment_status(
     payment_id: int,
     payload: PaymentStatusUpdate,
-    admin_secret_key: str = "123456",
+    admin_secret_key: str,
     db: Session = Depends(get_db),
 ):
-    if admin_secret_key != "123456":
+    if admin_secret_key != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized access")
 
     submission = db.query(models.PaymentSubmission).filter(models.PaymentSubmission.id == payment_id).first()
@@ -209,13 +202,11 @@ def update_payment_status(
     new_status = payload.status.lower()
     submission.status = new_status
 
-    # Elevate User in Database via SQLAlchemy
     if new_status == "approved":
         user = db.query(models.User).filter(models.User.email == submission.user_email).first()
         if user:
             user.is_paid = True
         else:
-            # Create the user directly if missing and grant access
             user = models.User(
                 email=submission.user_email,
                 password="default_hash_or_placeholder",

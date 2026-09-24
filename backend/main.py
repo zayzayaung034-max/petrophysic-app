@@ -18,9 +18,9 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables from .env file and set ADMIN_KEY
 load_dotenv()
-ADMIN_KEY = os.getenv("ADMIN_PASSWORD") or "123456"
+ADMIN_KEY = os.getenv("ADMIN_SECRET_KEY") or os.getenv("ADMIN_PASSWORD") or "123456"
 
 # Database imports
 from backend.database import engine, get_db
